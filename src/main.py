@@ -9,8 +9,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from sobel_native import sobel_native
-from sobel_opencv import sobel_opencv
+from dilation_native import dilate_native
+from dilation_opencv import dilate_opencv
 from benchmark import benchmark
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,9 +25,13 @@ def load_image(path):
     return img
 
 
-def quality(img):
-    a = sobel_native(img)
-    b = sobel_opencv(img)
+def binarize(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return bw
+
+
+def quality(a, b):
     d = np.abs(a.astype(np.int16) - b.astype(np.int16))
     return {
         "shape": a.shape,
@@ -37,14 +41,16 @@ def quality(img):
     }
 
 
-def save_comparison(img, native, opencv, out):
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5.4))
-    ax[0].imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+def save_comparison(orig, bw, native, opencv, out):
+    fig, ax = plt.subplots(1, 4, figsize=(20, 5.4))
+    ax[0].imshow(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB))
     ax[0].set_title("Оригинал", fontsize=13, pad=10)
-    ax[1].imshow(native, cmap="gray", vmin=0, vmax=255)
-    ax[1].set_title("Sobel — native (NumPy)", fontsize=13, pad=10)
-    ax[2].imshow(opencv, cmap="gray", vmin=0, vmax=255)
-    ax[2].set_title("Sobel — OpenCV", fontsize=13, pad=10)
+    ax[1].imshow(bw, cmap="gray", vmin=0, vmax=255)
+    ax[1].set_title("Бинаризация (Otsu)", fontsize=13, pad=10)
+    ax[2].imshow(native, cmap="gray", vmin=0, vmax=255)
+    ax[2].set_title("Дилатация — native (NumPy)", fontsize=13, pad=10)
+    ax[3].imshow(opencv, cmap="gray", vmin=0, vmax=255)
+    ax[3].set_title("Дилатация — OpenCV", fontsize=13, pad=10)
     for a in ax:
         a.axis("off")
     fig.tight_layout()
@@ -52,12 +58,12 @@ def save_comparison(img, native, opencv, out):
     plt.close(fig)
 
 
-def run_bench(img, sizes, out_csv):
+def run_bench(bw, sizes, out_csv):
     rows = []
     for s in sizes:
-        im = cv2.resize(img, (s, s), interpolation=cv2.INTER_AREA)
-        tn, sn, nn = benchmark(sobel_native, im)
-        tc, sc, nc = benchmark(sobel_opencv, im)
+        im = cv2.resize(bw, (s, s), interpolation=cv2.INTER_NEAREST)
+        tn, sn, nn = benchmark(dilate_native, im)
+        tc, sc, nc = benchmark(dilate_opencv, im)
         sp = tn / tc if tc else float("inf")
         rows.append({
             "size": f"{s}x{s}",
@@ -91,7 +97,7 @@ def plot_bench(df, out):
     ax.set_xticklabels(labels)
     ax.set_xlabel("Размер изображения")
     ax.set_ylabel("Время на один вызов, мс")
-    ax.set_title("Фильтр Собеля: native vs OpenCV")
+    ax.set_title("Дилатация 3×3: native vs OpenCV")
     ax.grid(True, axis="y", linestyle="-", alpha=0.25)
     ax.set_axisbelow(True)
     ax.legend(loc="upper left")
@@ -116,14 +122,19 @@ def main():
     print(f"image: {args.image}")
     print(f"shape: {img.shape}, dtype: {img.dtype}")
 
-    q = quality(img)
-    print("native vs opencv:")
+    bw = binarize(img)
+    print(f"binary: shape={bw.shape}, unique={np.unique(bw).tolist()}")
+
+    nat = dilate_native(bw)
+    ocl = dilate_opencv(bw)
+
+    q = quality(nat, ocl)
+    print("native vs opencv (dilate):")
     for k, v in q.items():
         print(f"  {k}: {v}")
 
-    nat = sobel_native(img)
-    ocl = sobel_opencv(img)
-    save_comparison(img, nat, ocl, IMAGES_DIR / "comparison.png")
+    save_comparison(img, bw, nat, ocl, IMAGES_DIR / "comparison.png")
+    cv2.imwrite(str(IMAGES_DIR / "binary.png"), bw)
     cv2.imwrite(str(IMAGES_DIR / "native.png"), nat)
     cv2.imwrite(str(IMAGES_DIR / "opencv.png"), ocl)
     print(f"saved: {IMAGES_DIR / 'comparison.png'}")
@@ -133,7 +144,7 @@ def main():
 
     sizes = [256, 512, 1024, 2048]
     print("\nbenchmark:")
-    df = run_bench(img, sizes, RESULTS / "benchmark.csv")
+    df = run_bench(bw, sizes, RESULTS / "benchmark.csv")
     plot_bench(df, IMAGES_DIR / "benchmark.png")
     print(f"csv: {RESULTS / 'benchmark.csv'}")
     print(f"plot: {IMAGES_DIR / 'benchmark.png'}")
